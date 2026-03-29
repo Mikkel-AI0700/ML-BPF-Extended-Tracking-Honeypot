@@ -88,13 +88,13 @@ def _stack_training_batches (dataset_loader,):
 
 def main ():
     train_dataset_loader = BethDatasetLoader(
-        training_dataset_path="../../datasets/labelled_training_data.csv"
+        training_dataset_path="../../datasets/original-datasets/labelled_training_data.csv"
     )
     validation_dataset_loader = BethDatasetLoader(
-        validation_dataset_path="../../datasets/labelled_validation_data.csv"
+        validation_dataset_path="../../datasets/original-datasets/labelled_validation_data.csv"
     )
     test_dataset_loader = BethDatasetLoader(
-        testing_dataset_path="../../datasets/labelled_training_data.csv"
+        testing_dataset_path="../../datasets/original-datasets/labelled_training_data.csv"
     )
 
     beth_ffr_model = BethFeedForward()
