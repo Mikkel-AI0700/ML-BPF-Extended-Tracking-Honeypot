@@ -5,9 +5,9 @@ import xgboost as xgb
 from sklearn.metrics import precision_score
 from sklearn.linear_model import LogisticRegression
 from sklearn.tree import DecisionTreeClassifier
+from imblearn.pipeline import Pipeline
 from imblearn.over_sampling import SMOTE
-from imlearn.Pipeline import Pipeline
-from sklearn.preprocessing import StandardScaler, FunctionTransformer
+from sklearn.preprocessing import StandardScaler, TargetEncoder
 from sklearn.model_selection import train_test_split, StratifiedKFold
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
@@ -23,8 +23,8 @@ def _return_lr_grid (opt: opt.Trial):
     return {
         "l1_ratio":     l1_ratio,
         "solver":       solver,
-        "max_iter":     opt.suggest_int(name="lr_max_iter", min=100, max=500, step=50),
-        "tol":          opt.suggest_float(name="lr_tol", , min=1e-7, max=1e-2, log=True),
+        "max_iter":     opt.suggest_int(name="lr_max_iter", low=100, high=500, step=50),
+        "tol":          opt.suggest_float(name="lr_tol", low=1e-7, high=1e-2, log=True),
         "random_state": 42,
         "n_jobs":       50
     }
@@ -43,31 +43,94 @@ def _return_dt_grid (opt: opt.Trial):
 
 def _return_xgb_grid (opt: opt.Trial):
     return {
-        # Boosting structure
         "n_estimators":         opt.suggest_int("xgb_n_estimators", 50, 500, step=50),
         "max_depth":            opt.suggest_int("xgb_max_depth", 3, 10),
         "max_leaves":           opt.suggest_int("xgb_max_leaves", 0, 64),
- 
-        # Learning
         "learning_rate":        opt.suggest_float("xgb_learning_rate", 1e-3, 0.3, log=True),
         "booster":              opt.suggest_categorical("xgb_booster", ["gbtree", "dart"]),
- 
-        # Regularization
-        "reg_alpha":            opt.suggest_float("xgb_reg_alpha", 1e-4, 10.0, log=True),   # L1
-        "reg_lambda":           opt.suggest_float("xgb_reg_lambda", 1e-4, 10.0, log=True),  # L2
+        "reg_alpha":            opt.suggest_float("xgb_reg_alpha", 1e-4, 10.0, log=True),
+        "reg_lambda":           opt.suggest_float("xgb_reg_lambda", 1e-4, 10.0, log=True),
         "gamma":                opt.suggest_float("xgb_gamma", 0.0, 5.0),
         "min_child_weight":     opt.suggest_int("xgb_min_child_weight", 1, 20),
- 
-        # Sampling 
         "subsample":            opt.suggest_float("xgb_subsample", 0.5, 1.0),
         "colsample_bytree":     opt.suggest_float("xgb_colsample_bytree", 0.5, 1.0),
         "colsample_bylevel":    opt.suggest_float("xgb_colsample_bylevel", 0.5, 1.0),
         "colsample_bynode":     opt.suggest_float("xgb_colsample_bynode", 0.5, 1.0),
- 
-        # Tree method
         "tree_method":          opt.suggest_categorical("xgb_tree_method", ["hist", "approx"]),
         "grow_policy":          opt.suggest_categorical("xgb_grow_policy", ["depthwise", "lossguide"]),
     }
+
+def _create_datasets ():
+    csv_paths_dataset = [
+        "../../datasets/original-datasets/labelled_2021may-ip-10-100-1-105.csv",
+        "../../datasets/original-datasets/labelled_2021may-ip-10-100-1-186.csv",
+        "../../datasets/original-datasets/labelled_2021may-ip-10-100-1-26.csv",
+        "../../datasets/original-datasets/labelled_2021may-ip-10-100-1-4.csv",
+        "../../datasets/original-datasets/labelled_2021may-ip-10-100-1-95.csv"
+    ]
+    columns_to_drop = [
+        "threadId",
+        "hostName",
+        "eventName",
+        "returnValue",
+        "processName",
+        "args",
+        "sus"
+    ]
+    main_pd = pd.read_csv("../../datasets/original-datasets/labelled_training_data.csv")
+
+    for dataset_path in csv_paths_dataset:
+        temporary_pd = pd.read_csv(dataset_path)
+        main_pd = pd.concat([main_pd, temporary_pd])
+    main_pd = main_pd.drop(columns_to_drop, axis=1).reset_index()
+    main_pd = main_pd.dropna()
+
+    tr_x, ts_x, tr_y, ts_y = train_test_split(
+        main_pd.iloc[:, :-1],
+        main_pd.iloc[:, -1],
+        train_size=0.9,
+        test_size=0.1,
+        shuffle=True,
+        random_state=42
+    )
+
+    return tr_x, tr_y, ts_x, ts_y
+
+def _create_pipelines ():
+    cols_to_standardize = [
+        "timestamp", 
+        "processId", 
+        "userId", 
+        "mountNamespace", 
+        "eventId",
+        "stackAddresses",
+        "argsNum"
+    ]
+
+    main_ct = ColumnTransformer([
+        ("ct_create_features", TargetEncoder(target_type="binary", random_state=42), [["stackAddresses"]]),
+        ("ct_standardize_cols", StandardScaler(), cols_to_standardize),
+    ])
+
+    main_lr_pipeline = Pipeline([
+        ("sklearn_ct_preprocessors", main_ct),
+        ("imblearn_preprocessor", SMOTE(sampling_strategy="minority", random_state=42)),
+        ("sklearn_logistic", LogisticRegression())
+    ])
+
+    main_dt_pipeline = Pipeline([
+        ("sklearn_ct_preprocessors", main_ct),
+        ("imblearn_preprocessor", SMOTE(sampling_strategy="minority", random_state=42)),
+        ("sklearn_tree", DecisionTreeClassifier())
+    ])
+
+    main_xgb_pipeline = Pipeline([
+        ("sklearn_ct_preprocessors", main_ct),
+        ("imblearn_preprocessor", SMOTE(sampling_strategy="minority", random_state=42)),
+        ("sklearn_forest", xgb.XGBClassifier())
+    ])
+
+    return main_lr_pipeline, main_dt_pipeline, main_xgb_pipeline
 
 def _optuna_trial (
     opt_trial,
@@ -92,69 +155,31 @@ def _optuna_trial (
     return np.mean(np.asarray(precision_score_array))
 
 def main ():
-    csv_paths_dataset = [
-        "../../datasets/original-datasets/labelled_2021may-ip-10-100-1-105.csv"
-        "../../datasets/original-datasets/labelled_2021may-ip-10-100-1-186.csv"
-        "../../datasets/original-datasets/labelled_2021may-ip-10-100-1-26.csv"
-        "../../datasets/original-datasets/labelled_2021may-ip-10-100-1-4.csv"
-        "../../datasets/original-datasets/labelled_2021may-ip-10-100-1-95.csv"
-    ]
-    cols_to_standardize = [
-        "timestamp", 
-        "processId", 
-        "userId", 
-        "mountNamespace", 
-        "eventId",
-        "stackAddresses",
-        "argsNum"
-    ]
-    main_pd = pd.read_csv("../../datasets/original-datasets/labelled_training_datasets.csv")
+    tr_x, tr_y, ts_x, ts_y = _create_datasets()
+    lr_pipe, dt_pipe, xgb_pipe = _create_pipelines()
 
-    for dataset_path in csv_paths_dataset:
-        temporary_pd = pd.read_csv(dataset_path)
-        main_pd = pd.concat([main_pd, temporary_pd])
-
-    main_ct = ColumnTransformer([
-        ("ct_create_features", TargetEncoder(target_type="binary", random_state=42), ["stackAddresses"]),
-        ("ct_standardize_cols", StandardScaler(), cols_to_standardize),
-    ])
-
-    main_lr_pipeline = Pipeline([
-        ("sklearn_ct_preprocessors", main_ct),
-        ("imblearn_preprocessor", SMOTE(random_state=42)),
-        ("sklearn_logistic", LogisticRegression())
-    ])
-
-    main_dt_pipeline = Pipeline([
-        ("sklearn_ct_preprocessors", main_ct),
-        ("imblearn_preprocessor", SMOTE(random_state=42)),
-        ("sklearn_tree", DecisionTreeClassifier())
-    ])
-
-    main_xgb_pipeline = Pipeline([
-        ("sklearn_ct_preprocessors", main_ct),
-        ("imblearn_preprocessor", SMOTE(random_state=42)),
-        ("sklearn_forest", xgb.XGBClassier())
-    ])
+    print(f"{len(tr_x)} \n{tr_x}")
+    print(f"{len(tr_y)} \n{tr_y}")
     
     strat_kfold = StratifiedKFold(shuffle=True, random_state=42)
-    lr_study = opt.create_study("LOGISTIC REGRESSION STUDY")
-    dt_study = opt.create_study("DECISION TREE CLASSIFIER STUDY")
-    xgb_study = opt.create_study("XGBCLASSIFIER STUDY")
+    lr_study = opt.create_study(study_name="LOGISTIC REGRESSION STUDY")
+    dt_study = opt.create_study(study_name="DECISION TREE CLASSIFIER STUDY")
+    xgb_study = opt.create_study(study_name="XGBCLASSIFIER STUDY")
 
     optuna_studies = [lr_study, dt_study, xgb_study]
-    pipeline_list = [main_lr_pipeline, main_dt_pipeline, main_xgb_pipeline]
+    pipeline_list = [lr_pipe, dt_pipe, xgb_pipe]
     param_grid_list = [_return_lr_grid, _return_dt_grid, _return_xgb_grid]
 
-    for stdy, pipeline, param_ref in zip(optuna_studies, pipeline_list, param_grid_ref):
+    for stdy, pipeline, param_ref in zip(optuna_studies, pipeline_list, param_grid_list):
         print(f"\n\nStudy: {stdy} \n\n")
         stdy.optimize(
             lambda trial: _optuna_trial(
                 trial,
+                pipeline,
                 param_ref(trial),
                 strat_kfold,
-                train_x,
-                train_y
+                tr_x,
+                tr_y
             ),
             n_trials=2000,
             n_jobs=60
