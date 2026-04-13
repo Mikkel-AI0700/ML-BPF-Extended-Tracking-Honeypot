@@ -11,7 +11,7 @@ from sklearn.preprocessing import StandardScaler, TargetEncoder
 from sklearn.model_selection import train_test_split, StratifiedKFold
 from sklearn.compose import ColumnTransformer
 
-def _create_datasets ():
+def _create_datasets (for_train: bool = False, for_actual: bool = False):
     csv_paths_dataset = [
         "../../datasets/original-datasets/labelled_2021may-ip-10-100-1-105.csv",
         "../../datasets/original-datasets/labelled_2021may-ip-10-100-1-186.csv",
@@ -25,6 +25,8 @@ def _create_datasets ():
         "eventName",
         "returnValue",
         "processName",
+        "stackAddresses",
+        "mountNamespace",
         "args",
         "sus"
     ]
@@ -33,33 +35,37 @@ def _create_datasets ():
     for dataset_path in csv_paths_dataset:
         temporary_pd = pd.read_csv(dataset_path)
         main_pd = pd.concat([main_pd, temporary_pd])
-    main_pd = main_pd.drop(columns_to_drop, axis=1).reset_index()
-    main_pd = main_pd.dropna()
 
-    tr_x, ts_x, tr_y, ts_y = train_test_split(
-        main_pd.iloc[:, :-1],
-        main_pd.iloc[:, -1],
-        train_size=0.9,
-        test_size=0.1,
-        shuffle=True,
-        random_state=42
-    )
+    main_pd = main_pd.drop(columns_to_drop, axis=1).reset_index(drop=True)
 
-    return tr_x, tr_y, ts_x, ts_y
+    if for_train:
+        dataframe_subset = main_pd.sample(frac=0.3)
+        return train_test_split(
+            dataframe_subset.iloc[:, :-1],
+            dataframe_subset.iloc[:, -1],
+            train_size=0.5,
+            test_size=0.2,
+            random_state=42,
+        )
+    if for_actual:
+        return train_test_split(
+            main_pd.iloc[:, :-1],
+            main_pd.iloc[:, -1],
+            train_size=0.8,
+            test_size=0.2,
+            random_state=42,
+        )
 
 def _create_column_transformer ():
     cols_to_standardize = [
         "timestamp", 
         "processId", 
         "userId", 
-        "mountNamespace", 
         "eventId",
-        "stackAddresses",
         "argsNum"
     ]
 
     return ColumnTransformer([
-        ("ct_create_features", TargetEncoder(target_type="binary", random_state=42), ["stackAddresses"]),
         ("ct_standardize_cols", StandardScaler(), cols_to_standardize),
     ])
 
@@ -78,8 +84,7 @@ def _return_lr_pipeline (opt: opt.Trial):
         "solver":       solver,
         "max_iter":     opt.suggest_int(name="lr_max_iter", low=100, high=500, step=50),
         "tol":          opt.suggest_float(name="lr_tol", low=1e-7, high=1e-2, log=True),
-        "random_state": 42,
-        "n_jobs":       50
+        "random_state": 42
     }
 
     return Pipeline([
@@ -146,7 +151,7 @@ def _optuna_trial (
 
     for tr_idx, ts_idx in strat_kfold.split(train_x, train_y):
         tr_x_subset = train_x.iloc[tr_idx, :]
-        tr_y_subset = train_x.iloc[tr_idx]
+        tr_y_subset = train_y.iloc[tr_idx]
         ts_x_subset = train_x.iloc[ts_idx, :]
         ts_y_subset = train_y.iloc[ts_idx]
 
@@ -157,7 +162,8 @@ def _optuna_trial (
     return np.mean(np.asarray(precision_score_array))
 
 def main ():
-    tr_x, tr_y, ts_x, ts_y = _create_datasets()
+    tr_x, ts_x, tr_y, ts_y = _create_datasets(for_train=True)
+    tra_x, tsa_x, tra_y, tsa_y = _create_datasets(for_actual=True)
 
     print(f"{len(tr_x)} \n{tr_x}")
     print(f"{len(tr_y)} \n{tr_y}")
@@ -166,6 +172,7 @@ def main ():
     optuna_studies = ["LOGISTIC REGRESSION STUDY", "DT CLASSIFIER STUDY", "XGBCLASSIFIER STUDY"]
     pipeline_constructor_refs = [_return_lr_pipeline, _return_dt_pipeline, _return_xgb_pipeline]
 
+    # Training loop
     for stdy, constructor_ref in zip(optuna_studies, pipeline_constructor_refs):
         print(f"\n\nStudy: {stdy} \n\n")
         temporary_study_instance = opt.create_study(study_name=stdy)
@@ -179,8 +186,12 @@ def main ():
                 tr_y
             ),
             n_trials=2000,
-            n_jobs=60
+            n_jobs=40
         )
+
+    # Actual model training loop
+    for _ in []:
+        pass
 
 if __name__ == "__main__":
     main()
