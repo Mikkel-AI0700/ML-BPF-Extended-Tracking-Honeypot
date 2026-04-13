@@ -1,3 +1,4 @@
+from typing import Any
 import numpy as np
 import pandas as pd
 import optuna as opt
@@ -38,13 +39,16 @@ def _create_datasets (for_train: bool = False, for_actual: bool = False):
 
     main_pd = main_pd.drop(columns_to_drop, axis=1).reset_index(drop=True)
 
+    main_pd_labels, label_counts = np.unique(main_pd.loc[:, "evil"], return_counts=True)
+    print(f"Labels: {main_pd_labels} | Label counts: {label_counts}")
+
     if for_train:
         dataframe_subset = main_pd.sample(frac=0.3)
         return train_test_split(
             dataframe_subset.iloc[:, :-1],
             dataframe_subset.iloc[:, -1],
             train_size=0.5,
-            test_size=0.2,
+            test_size=0.5,
             random_state=42,
         )
     if for_actual:
@@ -69,7 +73,11 @@ def _create_column_transformer ():
         ("ct_standardize_cols", StandardScaler(), cols_to_standardize),
     ])
 
-def _return_lr_pipeline (opt: opt.Trial):
+def _return_lr_pipeline (
+    opt: opt.Trial = None, 
+    for_train: bool = True, 
+    prod_hyperparameters: dict[str, Any] = None
+):
     ct = _create_column_transformer()
 
     solver = opt.suggest_categorical(name="lr_solver", choices=["lbfgs", "saga"])
@@ -87,13 +95,24 @@ def _return_lr_pipeline (opt: opt.Trial):
         "random_state": 42
     }
 
-    return Pipeline([
-        ("sklearn_ct_preprocessors", ct),
-        ("imblearn_preprocessor", SMOTE(sampling_strategy="minority", random_state=42)),
-        ("sklearn_logistic", LogisticRegression(**lr_parameter_grid))
-    ])
+    if for_train:
+        return Pipeline([
+            ("sklearn_ct_preprocessors", ct),
+            ("imblearn_preprocessor", SMOTE(sampling_strategy="minority", random_state=42)),
+            ("sklearn_logistic", LogisticRegression(**lr_parameter_grid))
+        ])
+    else:
+        return Pipeline([
+            ("sklearn_ct_preprocessors", ct),
+            ("imblearn_preprocessor", SMOTE(sampling_strategy="minority", random_state=42)),
+            ("sklearn_logistic", LogisticRegression(**prod_hyperparameters))
+        ])
 
-def _return_dt_pipeline (opt: opt.Trial):
+def _return_dt_pipeline (
+    opt: opt.Trial = None, 
+    for_train: bool = True, 
+    prod_hyperparameters: dict[str, Any] = None
+):
     ct = _create_column_transformer()
 
     dt_parameter_grid = {
@@ -107,13 +126,24 @@ def _return_dt_pipeline (opt: opt.Trial):
         "ccp_alpha":                opt.suggest_float("dt_ccp_alpha", 0.0, 0.05, log=True),
     }
 
-    return Pipeline([
-        ("sklearn_ct_preprocessors", ct),
-        ("imblearn_preprocessor", SMOTE(sampling_strategy="minority", random_state=42)),
-        ("sklearn_tree", DecisionTreeClassifier(**dt_parameter_grid))
-    ])
+    if for_train:
+        return Pipeline([
+            ("sklearn_ct_preprocessors", ct),
+            ("imblearn_preprocessor", SMOTE(sampling_strategy="minority", random_state=42)),
+            ("sklearn_tree", DecisionTreeClassifier(**dt_parameter_grid))
+        ])
+    else:
+        return Pipeline([
+            ("sklearn_ct_preprocessors", ct),
+            ("imblearn_preprocessor", SMOTE(sampling_strategy="minority", random_state=42)),
+            ("sklearn_tree", DecisionTreeClassifier(**prod_hyperparameters))
+        ])
 
-def _return_xgb_pipeline (opt: opt.Trial):
+def _return_xgb_pipeline (
+    opt: opt.Trial = None, 
+    for_train: bool = True, 
+    prod_hyperparameters: dict[str, Any] = None
+):
     ct = _create_column_transformer()
 
     xgb_parameter_grid = {
@@ -134,19 +164,26 @@ def _return_xgb_pipeline (opt: opt.Trial):
         "grow_policy":          opt.suggest_categorical("xgb_grow_policy", ["depthwise", "lossguide"]),
     }
 
-    return Pipeline([
-        ("sklearn_ct_preprocessors", ct),
-        ("imblearn_preprocessor", SMOTE(sampling_strategy="minority", random_state=42)),
-        ("sklearn_forest", xgb.XGBClassifier(**xgb_parameter_grid))
-    ])
+    if for_train:
+        return Pipeline([
+            ("sklearn_ct_preprocessors", ct),
+            ("imblearn_preprocessor", SMOTE(sampling_strategy="minority", random_state=42)),
+            ("sklearn_forest", xgb.XGBClassifier(**xgb_parameter_grid))
+        ])
+    else:
+        return Pipeline([
+            ("sklearn_ct_preprocessors", ct),
+            ("imblearn_preprocessor", SMOTE(sampling_strategy="minority", random_state=42)),
+            ("sklearn_forest", xgb.XGBClassifier(**prod_hyperparameters))
+        ])
 
 def _optuna_trial (
     opt_trial,
     constructed_pipeline,
-    strat_kfold,
     train_x: pd.DataFrame,
     train_y: pd.DataFrame
 ):
+    strat_kfold = StratifiedKFold(shuffle=True, random_state=42)
     precision_score_array = []
 
     for tr_idx, ts_idx in strat_kfold.split(train_x, train_y):
@@ -157,7 +194,7 @@ def _optuna_trial (
 
         constructed_pipeline.fit(tr_x_subset, tr_y_subset)
         ts_x_preds = constructed_pipeline.predict(ts_x_subset)
-        precision_score_array.append(precision_score(ts_y_subset, ts_x_preds, average="weighted"))
+        precision_score_array.append(precision_score(ts_y_subset, ts_x_preds, average="macro"))
 
     return np.mean(np.asarray(precision_score_array))
 
@@ -165,23 +202,17 @@ def main ():
     tr_x, ts_x, tr_y, ts_y = _create_datasets(for_train=True)
     tra_x, tsa_x, tra_y, tsa_y = _create_datasets(for_actual=True)
 
-    print(f"{len(tr_x)} \n{tr_x}")
-    print(f"{len(tr_y)} \n{tr_y}")
-    
-    strat_kfold = StratifiedKFold(shuffle=True, random_state=42)
     optuna_studies = ["LOGISTIC REGRESSION STUDY", "DT CLASSIFIER STUDY", "XGBCLASSIFIER STUDY"]
     pipeline_constructor_refs = [_return_lr_pipeline, _return_dt_pipeline, _return_xgb_pipeline]
 
-    # Training loop
     for stdy, constructor_ref in zip(optuna_studies, pipeline_constructor_refs):
+        # Training loop
         print(f"\n\nStudy: {stdy} \n\n")
         temporary_study_instance = opt.create_study(study_name=stdy)
-
         temporary_study_instance.optimize(
             lambda trial: _optuna_trial(
                 trial,
                 constructor_ref(trial),
-                strat_kfold,
                 tr_x,
                 tr_y
             ),
@@ -189,9 +220,20 @@ def main ():
             n_jobs=40
         )
 
-    # Actual model training loop
-    for _ in []:
-        pass
+        # Training the production model
+        print(f"\nTRAINING PRODUCTION MODEL ON STUDY: {stdy}")
+        temporary_prod_model = constructor_ref(
+            for_train=False, 
+            prod_hyperparameters=temporary_study_instance.best_params
+        )
+        temporary_prod_model.fit(tra_x, tra_y)
+        prod_model_predictions = temporary_prod_model.predict(tsa_x)
+        prod_model_score = precision_score(tsa_y, prod_model_predictions, average="macro")
+
+        with open("a", f"{stdy}.txt") as file:
+            file.write(f"Best training score: {temporary_study_instance.best_value}")
+            file.write(f"Best production score: {prod_model_score}")
+            file.write(f"Best parameters: {temporary_study_instance.best_params}")
 
 if __name__ == "__main__":
     main()
