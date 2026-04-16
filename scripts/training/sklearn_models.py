@@ -12,6 +12,8 @@ from sklearn.preprocessing import StandardScaler, TargetEncoder
 from sklearn.model_selection import train_test_split, StratifiedKFold
 from sklearn.compose import ColumnTransformer
 
+opt.logging.set_verbosity(opt.logging.ERROR)
+
 def _create_datasets (for_train: bool = False, for_actual: bool = False):
     csv_paths_dataset = [
         "../../datasets/original-datasets/labelled_2021may-ip-10-100-1-105.csv",
@@ -75,27 +77,27 @@ def _create_column_transformer ():
 
 def _return_lr_pipeline (
     opt: opt.Trial = None, 
-    for_train: bool = True, 
     prod_hyperparameters: dict[str, Any] = None
 ):
-    ct = _create_column_transformer()
+    if opt is not None:
+        ct = _create_column_transformer()
 
-    solver = opt.suggest_categorical(name="lr_solver", choices=["lbfgs", "saga"])
-    
-    if solver == "lbfgs":
-        l1_ratio = 0
-    else:
-        l1_ratio = 0.50
+        solver = opt.suggest_categorical(name="lr_solver", choices=["lbfgs", "saga"])
+        
+        if solver == "lbfgs":
+            l1_ratio = 0
+        else:
+            l1_ratio = 0.50
 
-    lr_parameter_grid = {
-        "l1_ratio":     l1_ratio,
-        "solver":       solver,
-        "max_iter":     opt.suggest_int(name="lr_max_iter", low=100, high=500, step=50),
-        "tol":          opt.suggest_float(name="lr_tol", low=1e-7, high=1e-2, log=True),
-        "random_state": 42
-    }
+        lr_parameter_grid = {
+            "l1_ratio":     l1_ratio,
+            "solver":       solver,
+            "max_iter":     opt.suggest_int(name="lr_max_iter", low=100, high=500, step=50),
+            "tol":          opt.suggest_float(name="lr_tol", low=1e-7, high=1e-2, log=True),
+            "random_state": 42
+        }
 
-    if for_train:
+    if opt is not None:
         return Pipeline([
             ("sklearn_ct_preprocessors", ct),
             ("imblearn_preprocessor", SMOTE(sampling_strategy="minority", random_state=42)),
@@ -110,23 +112,23 @@ def _return_lr_pipeline (
 
 def _return_dt_pipeline (
     opt: opt.Trial = None, 
-    for_train: bool = True, 
     prod_hyperparameters: dict[str, Any] = None
 ):
-    ct = _create_column_transformer()
+    if opt is not None:
+        ct = _create_column_transformer()
 
-    dt_parameter_grid = {
-        "criterion":                opt.suggest_categorical("dt_criterion", ["gini", "entropy"]),
-        "max_depth":                opt.suggest_int("dt_max_depth", 5, 50, 5),
-        "min_samples_split":        opt.suggest_int("dt_min_samples_split", 50, 100, 10),
-        "min_samples_leaf":         opt.suggest_int("dt_min_samples_leaf", 60, 90, 10),
-        "max_features":             opt.suggest_categorical("dt_max_features", ["sqrt", "log2", None]),
-        "max_leaf_nodes":           opt.suggest_int("dt_max_leaf_nodes", 10, 100),
-        "min_impurity_decrease":    opt.suggest_float("dt_min_impurity_decrease", 0.0, 0.1, log=True),
-        "ccp_alpha":                opt.suggest_float("dt_ccp_alpha", 0.0, 0.05, log=True),
-    }
+        dt_parameter_grid = {
+            "criterion":                opt.suggest_categorical("dt_criterion", ["gini", "entropy"]),
+            "max_depth":                opt.suggest_int("dt_max_depth", 5, 50, 5),
+            "min_samples_split":        opt.suggest_int("dt_min_samples_split", 50, 100, 10),
+            "min_samples_leaf":         opt.suggest_int("dt_min_samples_leaf", 60, 90, 10),
+            "max_features":             opt.suggest_categorical("dt_max_features", ["sqrt", "log2", None]),
+            "max_leaf_nodes":           opt.suggest_int("dt_max_leaf_nodes", 10, 100),
+            "min_impurity_decrease":    opt.suggest_float("dt_min_impurity_decrease", 0.0, 0.1, log=True),
+            "ccp_alpha":                opt.suggest_float("dt_ccp_alpha", 0.0, 0.05, log=True),
+        }
 
-    if for_train:
+    if opt is not None:
         return Pipeline([
             ("sklearn_ct_preprocessors", ct),
             ("imblearn_preprocessor", SMOTE(sampling_strategy="minority", random_state=42)),
@@ -141,30 +143,30 @@ def _return_dt_pipeline (
 
 def _return_xgb_pipeline (
     opt: opt.Trial = None, 
-    for_train: bool = True, 
     prod_hyperparameters: dict[str, Any] = None
 ):
-    ct = _create_column_transformer()
+    if opt is not None:
+        ct = _create_column_transformer()
 
-    xgb_parameter_grid = {
-        "n_estimators":         opt.suggest_int("xgb_n_estimators", 50, 500, step=50),
-        "max_depth":            opt.suggest_int("xgb_max_depth", 3, 10),
-        "max_leaves":           opt.suggest_int("xgb_max_leaves", 0, 64),
-        "learning_rate":        opt.suggest_float("xgb_learning_rate", 1e-3, 0.3, log=True),
-        "booster":              opt.suggest_categorical("xgb_booster", ["gbtree", "dart"]),
-        "reg_alpha":            opt.suggest_float("xgb_reg_alpha", 1e-4, 10.0, log=True),
-        "reg_lambda":           opt.suggest_float("xgb_reg_lambda", 1e-4, 10.0, log=True),
-        "gamma":                opt.suggest_float("xgb_gamma", 0.0, 5.0),
-        "min_child_weight":     opt.suggest_int("xgb_min_child_weight", 1, 20),
-        "subsample":            opt.suggest_float("xgb_subsample", 0.5, 1.0),
-        "colsample_bytree":     opt.suggest_float("xgb_colsample_bytree", 0.5, 1.0),
-        "colsample_bylevel":    opt.suggest_float("xgb_colsample_bylevel", 0.5, 1.0),
-        "colsample_bynode":     opt.suggest_float("xgb_colsample_bynode", 0.5, 1.0),
-        "tree_method":          opt.suggest_categorical("xgb_tree_method", ["hist", "approx"]),
-        "grow_policy":          opt.suggest_categorical("xgb_grow_policy", ["depthwise", "lossguide"]),
-    }
+        xgb_parameter_grid = {
+            "n_estimators":         opt.suggest_int("xgb_n_estimators", 50, 500, step=50),
+            "max_depth":            opt.suggest_int("xgb_max_depth", 3, 10),
+            "max_leaves":           opt.suggest_int("xgb_max_leaves", 0, 64),
+            "learning_rate":        opt.suggest_float("xgb_learning_rate", 1e-3, 0.3, log=True),
+            "booster":              opt.suggest_categorical("xgb_booster", ["gbtree", "dart"]),
+            "reg_alpha":            opt.suggest_float("xgb_reg_alpha", 1e-4, 10.0, log=True),
+            "reg_lambda":           opt.suggest_float("xgb_reg_lambda", 1e-4, 10.0, log=True),
+            "gamma":                opt.suggest_float("xgb_gamma", 0.0, 5.0),
+            "min_child_weight":     opt.suggest_int("xgb_min_child_weight", 1, 20),
+            "subsample":            opt.suggest_float("xgb_subsample", 0.5, 1.0),
+            "colsample_bytree":     opt.suggest_float("xgb_colsample_bytree", 0.5, 1.0),
+            "colsample_bylevel":    opt.suggest_float("xgb_colsample_bylevel", 0.5, 1.0),
+            "colsample_bynode":     opt.suggest_float("xgb_colsample_bynode", 0.5, 1.0),
+            "tree_method":          opt.suggest_categorical("xgb_tree_method", ["hist", "approx"]),
+            "grow_policy":          opt.suggest_categorical("xgb_grow_policy", ["depthwise", "lossguide"]),
+        }
 
-    if for_train:
+    if opt is not None:
         return Pipeline([
             ("sklearn_ct_preprocessors", ct),
             ("imblearn_preprocessor", SMOTE(sampling_strategy="minority", random_state=42)),
@@ -176,6 +178,33 @@ def _return_xgb_pipeline (
             ("imblearn_preprocessor", SMOTE(sampling_strategy="minority", random_state=42)),
             ("sklearn_forest", xgb.XGBClassifier(**prod_hyperparameters))
         ])
+
+def _log_score (study: opt.study.Study, trial: opt.trial.Trial):
+    trial_number = trial.number
+    trial_score = trial.value
+    study_best_score = study.best_value
+    study_best_parameters = study.best_params
+
+    print(f"\nTrial number: {trial_number} | Score: {trial_score}")
+    print(f"Best score: {study_best_score:.2f}% | Best parameters: {study_best_parameters}")
+
+def _monitor_and_stop (study: opt.study.Study, trial: opt.trial.Trial):
+    upper_limit = 0.95
+    lower_limit = 0.80
+    current_trial_score = trial.value
+
+    if trial.number <= 10:
+        return
+
+    if (current_trial_score > upper_limit or
+        current_trial_score < lower_limit
+    ):
+        for trial in study.trials[trial.number - 10]:
+            if trial.value < upper_limit and trial.value > lower_limit:
+                with open(f"{study.study_name}.txt", "a") as file:
+                    file.write(f"Best score: {study.best_value:.2f}%")
+                    file.write(f"Best hyperparameters: {study.best_params}")
+            break
 
 def _optuna_trial (
     opt_trial,
@@ -208,7 +237,11 @@ def main ():
     for stdy, constructor_ref in zip(optuna_studies, pipeline_constructor_refs):
         # Training loop
         print(f"\n\nStudy: {stdy} \n\n")
-        temporary_study_instance = opt.create_study(study_name=stdy)
+        temporary_study_instance = opt.create_study(
+            study_name=stdy, 
+            direction="maximize",
+            callbacks=[_log_score, _monitor_and_stop]
+        )
         temporary_study_instance.optimize(
             lambda trial: _optuna_trial(
                 trial,
@@ -216,14 +249,13 @@ def main ():
                 tr_x,
                 tr_y
             ),
-            n_trials=2000,
+            n_trials=150,
             n_jobs=40
         )
 
         # Training the production model
         print(f"\nTRAINING PRODUCTION MODEL ON STUDY: {stdy}")
         temporary_prod_model = constructor_ref(
-            for_train=False, 
             prod_hyperparameters=temporary_study_instance.best_params
         )
         temporary_prod_model.fit(tra_x, tra_y)
